@@ -1,0 +1,34 @@
+#pragma once
+
+typedef int bool;
+typedef unsigned char uint8_t;
+typedef unsigned short uint16_t;
+typedef unsigned int uint32_t;
+typedef unsigned long long uint64_t;
+typedef uint32_t size_t;
+// 물리 메모리 주소
+typedef uint32_t paddr_t;
+// 가상 메모리 주소
+typedef uint32_t vaddr_t;
+
+#define PAGE_SIZE 4096
+
+#define true 1
+#define false 0
+#define NULL ((void*)0)
+// 값을 2의 거듭제곱의 정렬의 값을 반환
+#define align_up(value, align) __builtin_align_up(value, align)
+#define is_aligned(value, align) __builtin_is_aligned(value, align)
+// 구조체 내 멤버의 오프셋(구조체 시작부터 몇 바이트)을 반환
+#define offsetof(type, member) __builtin_offsetof(type, member)
+
+#define va_list __builtin_va_list
+#define va_start __builtin_va_start
+#define va_end __builtin_va_end
+#define va_arg __builtin_va_arg
+
+void *memset(void *buf, char c, size_t n);
+void *memcpy(void *dst, const void *src, size_t n);
+char *strcpy(char *dst, const char *src);
+int strcmp(const char *s1, const char *s2);
+void printf(const char *fmt, ...);
