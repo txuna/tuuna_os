@@ -17,4 +17,5 @@ $CC $CFLAGS -Wl,-Tkernel.ld -Wl,-Map=kernel.map -o kernel.elf \
 # -serial mon:stdio: QEMU의 표준 입출력을 가상 머신의 직렬포트에 연결
 # --no-reboot: 가상 머신이 충돌하면 재부팅하지 않고 에뮬레이터를 중지
 $QEMU -machine virt -bios default -nographic -serial mon:stdio --no-reboot \
+    -d unimp,guest_errors,int,cpu_reset -D qemu.log \
     -kernel kernel.elf # new: Load the kernel

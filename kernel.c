@@ -6,7 +6,12 @@ typedef uint32_t size_t;
 
 extern char __bss[], __bss_end[], __stack_top[];
 extern char __free_ram[], __free_ram_end[];
-
+/*
+    커널 페이지는 __kernel_base에서 __free_ram_end에 걸쳐있음
+    이 접근 방식은 커널이 정적으로 할당된 영역(.text)과 동적으로 할당된 영역 모두에 항상 액세스할 수 있도록 보장
+    alloc_pages로 관리하는 동적 할당 영역
+*/
+extern char __kernel_base[]; 
 
 /*
 Context Switching. 
@@ -88,9 +93,16 @@ struct process *create_process(uint32_t pc){
     *--sp = 0;                      // s0
     *--sp = (uint32_t )pc;          // ra
 
+    // Map Kernel Pages.
+    uint32_t *page_table = (uint32_t *) alloc_pages(1);
+    for (paddr_t paddr = (paddr_t) __kernel_base; paddr < (paddr_t) __free_ram_end; paddr += PAGE_SIZE){
+        map_page(page_table, paddr, paddr, PAGE_R | PAGE_W | PAGE_X);
+    }
+
     proc->pid = i + 1;
     proc->state = PROC_RUNNABLE;
     proc->sp = (uint32_t )sp;
+    proc->page_table = page_table;
     return proc;
 }
 
@@ -253,6 +265,20 @@ void handle_trap(struct trap_frame *f){
 }
 
 /*
+프로그램이 메모리에 접근할 때 CPU는 지정된 주소(가상 주소)를 실제 주소로 변환한다.
+가상 주소를 물리적 주소에 매핑하는 테이블을 페이지 테이블이라고 함.
+페이지 테이블을 전환하면 동일한 가상 주소가 다른 물리적 주소를 가리킬 수 있음 
+이를 통해 메모리 공간(가상 주소 공간)을 격리하고 커널과 애플리케이션 메모리 영역을 분리하여 시스템보안 강화
+
+2단계 페이지 테이블 사용하는 RISC-V의 페이징 메커니즘인 Sv32
+32비트 가상 주소는 1단계 페이지 테이블 인덱스(VPN[1]과 2단계 인덱스 VPN[0]으로 나눠진다.
+
+동일한 4KB 페이지 내의 주소는 동일한 페이지 테이블 항목에 있음
+메모리에 접근할 때 CPU는 VPN[1], VPN[0]을 계산하여 상응하는 페이지테이블의 엔트리를 찾고 읽어서 매핑된 물리주소를 읽음
+그리고 offset을 더해서 물리주소를 얻음 
+*/
+
+/*
 링커 스크립트의 ALIGN(4096)으로 인해 __free_ram은 4KB 경계에 배치됨.
 따라서 alloc_pages 함수는 항상 4KB에 정렬된 주솔르 반환한다. __free_ram_end를 초과해서 할당을 시도하면, 메모리 부족으로 커널 패닉 발생
 
@@ -272,6 +298,33 @@ paddr_t alloc_pages(uint32_t n){
 
     memset((void *)paddr, 0, n * PAGE_SIZE);
     return paddr;
+}
+
+/*
+1단계 페이지 테이블(table1), 가상 주소(vaddr), 물리 주소(paddr), 페이지 테이블 항목 플래그를 받음
+두 번째 수준의 페이지 테이블을 준비하고 두 번째 수준의 페이지 테이블 항목을 채운다.
+항목에 실제 주소 자체가 아니라 실제 페이지 번호가 포함되어야 하므로 paddr을 PAGE_SIZE로 나눈다. 
+ */
+void map_page(uint32_t *table1, uint32_t vaddr, paddr_t paddr, uint32_t flags){
+    if(!is_aligned(vaddr, PAGE_SIZE)) {
+        PANIC("unaligned vaddr %x", vaddr);
+    }
+
+    if(!is_aligned(paddr, PAGE_SIZE)) {
+        PANIC("unaligned paddr: %x", paddr);
+    }
+
+    uint32_t vpn1 = (vaddr >> 22) & 0x3ff;
+    if ((table1[vpn1] & PAGE_V) == 0){
+        // Create the non-existent 2nd level page table
+        uint32_t pt_paddr = alloc_pages(1);
+        table1[vpn1] = ((pt_paddr / PAGE_SIZE) << 10) | PAGE_V; 
+    }
+
+    // set the 2nd level page table entry to map the physical page.
+    uint32_t vpn0 = (vaddr >> 12) & 0x3ff;
+    uint32_t *table0 = (uint32_t *)((table1[vpn1] >> 10) * PAGE_SIZE);
+    table0[vpn0] = ((paddr / PAGE_SIZE) << 10 | flags | PAGE_V);
 }
 
 /*
@@ -349,10 +402,44 @@ void yield(void){
 
     // 스택포인터는 낮은 주소로 확장되므로 커널 스택의 초기 값으로 sizeof(next->stack)번째 바이트의 주소를 설정한다.
     __asm__ __volatile__(
+        "sfence.vma\n"
+        /*
+             satp     80080258인것을 확인할 수 있음
+             RISC_V Sv32모드에 따라 이 값을 해석하면 첫 번째 레벨 페이지 테이블의 시작 물리적 주소를 알 수 있음
+             ( 80080258  & 0x3fffff) * 4096 =  0x80258000
+            
+            가상 메모리 주소인 0x80000000에 상응하는 second level page table을 알고싶다면 아래 명령어 사용
+            xp /x 0x80258000+512 * 4
+            (xp 명령어 대신 x를 사용하면 지정된 가상 주소에 대한 메모리 덤프를 볼 수 잇음
+                이는 커널 공간과 달리 가상 주소가 실제 주소가 일치하지 않는 사용자 공간 메모리를 검사할 때 유용함
+            )
+
+            0x80000000 >> 22 = 512
+
+            0000000080258800: 0x20096401
+            두 번재 레벨 페이지 테이블은 (0x20096400 >> 10) * 4096 = 0x80259000에 위치
+            xp /1024x 0x80259000
+
+            초기값은 0으로 채워져 있지만 512번째 항목부터 값이 나타나기 시작함
+            이는 __kernel_base가 0x80200000이고 VPN[1]이 0x200이기 때문에이다.
+            QEMU에는 현재 페이지 테이블 매핑을 사람이 읽을 수 있는 형식으로 표시하는 명령어 info mem
+        */
+        /* satp에서 1단계 페이지 테이블을 지정하여 페이지 테이블을 전환할 수 있다. */
+        "csrw satp, %[satp]\n"
+        "sfence.vma\n"
         "csrw sscratch, %[sscratch]\n"
         :
-        : [sscratch] "r" ((uint32_t) &next->stack[sizeof(next->stack)])
+        :   [satp] "r" (SATP_SV32 | ((uint32_t) next->page_table / PAGE_SIZE)), 
+            [sscratch] "r" ((uint32_t) &next->stack[sizeof(next->stack)])
     );
+    /*
+        sfence.vma
+        1. 페이지 테이블의 변경 사항이 제대로 완료되었는지 확인 (memory fence)
+        2. 페이지 테이블 항목(TLB)의 캐시를 지우기
+        
+        커널이 시작되면 기본적으로 페이징이 비활성화됨. (satp 레지스터가 설정되지 않음)
+        가상 주소는 실제 주소와 일치하는 것처럼 동작
+    */
 
     // Context Switch
     struct process *prev = current_proc;

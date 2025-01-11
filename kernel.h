@@ -40,6 +40,14 @@ struct trap_frame {
     uint32_t sp;
 } __attribute__((packed));
 
+// PAGE TABLE
+#define SATP_SV32 (1u << 31) // satp 레지스터 - 페이지 Sv32 모드 활성화
+#define PAGE_V (1 << 0) //  Valid bit (entry is enabled)
+#define PAGE_R (1 << 1) //  Readable
+#define PAGE_W (1 << 2) //  Writable
+#define PAGE_X (1 << 3) //  Executable
+#define PAGE_U (1 << 4) //  User (accessible in user mode)
+
 
 /*
 CSR(제어 및 상태 레지스터)는 CPU 설정을 저장하는 레지스터, CSR 목록은 RISC-V 권한 사양에서 확인 가능
@@ -80,6 +88,7 @@ struct process {
     int pid;             // 프로세스 아이디
     int state;         // 프로세스 상태 
     vaddr_t sp;         // 스택 포인터
+    uint32_t *page_table;
     uint8_t stack[8192]; // 커널 스택
 };
 /*
@@ -88,3 +97,6 @@ struct process {
 seL4는 이 방식을 채택. "where to store the program's context" 문제는 Go, Rust와 같은 프로그래밍 언어의 비동기 런타임에서 논의되는 주제
 => stackless async 검색
 */
+
+paddr_t alloc_pages(uint32_t n);
+void map_page(uint32_t *table1, uint32_t vaddr, paddr_t paddr, uint32_t flags);
