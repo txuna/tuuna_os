@@ -17,7 +17,7 @@ typedef uint32_t vaddr_t;
 #define false 0
 #define NULL ((void*)0)
 // 값을 2의 거듭제곱의 정렬의 값을 반환
-#define align_up(value, align) __builtin_align_up(value, align)
+#define align_up(value, align)   __builtin_align_up(value, align)
 #define is_aligned(value, align) __builtin_is_aligned(value, align)
 // 구조체 내 멤버의 오프셋(구조체 시작부터 몇 바이트)을 반환
 #define offsetof(type, member) __builtin_offsetof(type, member)

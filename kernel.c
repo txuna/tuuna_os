@@ -137,6 +137,190 @@ __attribute__((naked)) void user_entry(void){
     );
 }
 
+/*
+    MMIO 레지스터에 엑세스하는 것은 일반 메모리에 엑세스하는 것과는 다름
+    컴파일러가 읽기/쓰기 작업을 최적화하지 못하도록 휘발성 키워드를 사용 
+    MMIO에서 메모리 엑세스 부작용(장치에 명령 전송)을 유발할 수 있음
+*/
+uint32_t virtio_reg_read32(unsigned offset){
+    return *((volatile uint32_t *) (VIRTIO_BLK_PADDR + offset));
+}
+
+uint64_t virtio_reg_read64(unsigned offset){
+    return *((volatile uint64_t *) (VIRTIO_BLK_PADDR + offset));
+}
+
+void virtio_reg_write32(unsigned offset, uint32_t value){
+    *((volatile uint32_t *) (VIRTIO_BLK_PADDR + offset)) = value;
+}
+
+void virtio_reg_fetch_and_or32(unsigned offset, uint32_t value) {
+    virtio_reg_write32(offset, virtio_reg_read32(offset) | value);
+}
+
+/*
+    Virtio device 초기화
+    https://docs.oasis-open.org/virtio/virtio/v1.1/csprd01/virtio-v1.1-csprd01.html#x1-910003
+
+    3.1.1 드라이버 요구 사항 : 장치 초기화 드라이버는 장치를 초기화하려는 다음 순서를 따라야 한다.
+    1. 디바이스 리셋
+    2. 게스트 OS가 장치를 인식했음을 알리는 ACKNOWLEDGE 상태 비트를 설정한다.
+    3 드라이버 상태 비트 설정: 게스트 OS가 장치를 구동하는 방법을 알고 있다. 
+    4. 디바이스 기능 비트를 읽고 OS와 드라이버가 이해하는 기능 비트의 하위 집합을 디바이스에 쓴다.
+    이단계에서 드라이버는 디바이스를 수락하기 전에 디바이스를 지원할 수 있는지 확인하기 위해 디바이스별 구성 필드를 읽을 수 있지만 쓰면 안된다.
+
+    5. FEATURES_OK 상태 비트를 설정한다. 이 단계 이후에는 드라이버가 새 feature 비트를 수락하지 않아야 한다.
+    6. 장치 상태를 다시 읽어 FEATURES_OK 비트가 여전히 설정되어 있는지 확인한다. 
+    그렇지 않으면 장치가 하위 기능 집합을 지원하지 않으므로 장치를 사용할 수 없다.
+
+    7. 디바이스에 대한 버츄어 검색, 버스별 설정(선택 사항), 디바이스의 virtio 구성 공간 읽기 및 쓰기, virtqueue 등 디바이스별 설정 수행
+    8. DRIVER_OK 비트를 설정 한다. 디비아시그ㅏ "LIVE"
+*/
+struct virtio_virtq *blk_request_vq;
+struct virtio_blk_req *blk_req;
+paddr_t blk_req_paddr;
+unsigned blk_capacity;
+
+void virtio_blk_init(void){
+    if(virtio_reg_read32(VIRTIO_REG_MAGIC) != 0x74726976){
+        PANIC("virtio: invalid magic value");
+    }
+
+    if(virtio_reg_read32(VIRTIO_REG_VERSION) != 1){
+        PANIC("virtio: invalid version");
+    }
+
+    if(virtio_reg_read32(VIRTIO_REG_DEVICE_ID) != VIRTIO_DEVICE_BLK){
+        PANIC("virtio: invalid device id");
+    }
+
+    // 1. reset the device
+    virtio_reg_write32(VIRTIO_REG_DEVICE_STATUS, 0);
+    
+    // 2. Set the ACKNOWLEDGE status bit, Guest OS has noticed the device
+    virtio_reg_fetch_and_or32(VIRTIO_REG_DEVICE_STATUS, VIRTIO_STATUS_ACK);
+
+    // 3. Set the Driver status bit
+    virtio_reg_fetch_and_or32(VIRTIO_REG_DEVICE_STATUS, VIRTIO_STATUS_DRIVER);
+    
+    // 5. Set the FEATURE_OK status bit
+    virtio_reg_fetch_and_or32(VIRTIO_REG_DEVICE_STATUS, VIRTIO_STATUS_FEAT_OK);
+
+    // 7. Perform device-specific setup, including discovery of virqueues for the device
+    blk_request_vq = virtq_init(0);
+
+    // 8. Set the DRIVER_OK status bit
+    virtio_reg_write32(VIRTIO_REG_DEVICE_STATUS, VIRTIO_STATUS_DRIVER_OK);
+
+    // Get the disk capacity
+    blk_capacity = virtio_reg_read64(VIRTIO_REG_DEVICE_CONFIG + 0) * SECTOR_SIZE;
+    printf("virtio-blk: capacity is %d bytes\n", blk_capacity);
+
+    // Allocate a region to store requests to the device
+    blk_req_paddr = alloc_pages(align_up(sizeof(*blk_req), PAGE_SIZE) / PAGE_SIZE);
+    blk_req = (struct virtio_blk_req *)blk_req_paddr;
+}
+
+/*
+    Virtqueue 초기화
+
+    1. QueueSel에서 index(첫 번째 큐는 0)를 쓰는 큐를 선택한다.
+    2. 큐가 아직 사용중인지 확인: 반환값이 0일 것으로 예상하여 QueuePFN을 읽는다. 
+    3. QueueNumMax에서 최대 대기열 크기(요소 수)를 읽는다. 반환된 값이 0이면 큐를 사용할 수 없는 것
+    4. 인접한 가상 메모리에 큐 페이지를 할당하고 영점화하여 Used Ring을 Align(페이지 크기)한다.
+    드라이버는 QueueNumMax보다 작거나 같은 큐 크기를 선택해야 한다.
+    5. QueueNum에 큐 크기를 기록하여 큐 크기를 알린다.
+    6. 사용된 정렬에 대한 값을 바이트 단위로 QueueAlign에 기록하여 장치에 알린다.
+    7. 큐의 첫 번째 페이지의 실제 번호를 QueuePFN 레지스터에 기록한다.
+*/
+
+// This function allocates a memory region for a virtqueue and tells the its physical address to the device.
+// The device will use this memory region to read/write requests 
+
+// 초기화 프로세스에서 드라이버가 하는 일은 디바이스 capabilities/features를 확인하고 OS 리소스(ex. 메모리영역)을 할당하고, 매개변수를 설정한다.
+struct virtio_virtq *virtq_init(unsigned index){
+    // Allocate a region for the virtqueue.
+    paddr_t virtq_paddr = alloc_pages(align_up(sizeof(struct virtio_virtq), PAGE_SIZE) / PAGE_SIZE);
+    struct virtio_virtq *vq = (struct virtio_virtq *)virtq_paddr;
+    vq->queue_index = index;
+    vq->used_index = (volatile uint16_t *) &vq->used.index;
+    
+    // 1. Select the queue writing its index (first queue is 0) To QueueSel.
+    virtio_reg_write32(VIRTIO_REG_QUEUE_SEL, index);
+    // 5. Notify the device about the queue size by writing the size to QueueNum.
+    virtio_reg_write32(VIRTIO_REG_QUEUE_NUM, VIRTQ_ENTRY_NUM);
+    // 6. Notify the device about the used alignment by writing its valye in bytes
+    virtio_reg_write32(VIRTIO_REG_QUEUE_ALIGN, 0);
+    // 7. Write the physical number of the first page of the queue to the QueuePFN
+    virtio_reg_write32(VIRTIO_REG_QUEUE_PFN, virtq_paddr);
+    return vq;
+}
+
+// Notifies the device that there is a new request. 'desc_index' is the index
+// of the head descriptor of the new request
+void virtq_kick(struct virtio_virtq *vq, int desc_index){
+    vq->avail.ring[vq->avail.index % VIRTQ_ENTRY_NUM] = desc_index;
+    vq->avail.index++;
+    __sync_synchronize();
+    virtio_reg_write32(VIRTIO_REG_QUEUE_NOTIFY, vq->queue_index);
+    vq->last_used_index++;
+}
+
+// Return whether there are requests being processed by the device
+bool virtq_is_busy(struct virtio_virtq *vq){
+    return vq->last_used_index != *vq->used_index;
+}
+
+// Reads/Writes from/to virtio-blk device
+void read_write_disk(void *buf, unsigned sector, int is_write){
+    if(sector >= blk_capacity / SECTOR_SIZE){
+        printf("virtio: tried to read/write sector=%d, but capacity is %d\n", 
+                sector, blk_capacity / SECTOR_SIZE);
+        return;
+    }
+
+    // Construct the request according to the virtio-blk spec
+    blk_req->sector = sector;
+    blk_req->type = is_write ? VIRTIO_BLK_T_OUT : VIRTIO_BLK_T_IN;
+    if(is_write){
+        memcpy(blk_req->data, buf, SECTOR_SIZE);
+    }
+
+    // Construct the virtqueue descriptors (using 3 descriptors).
+    struct virtio_virtq *vq = blk_request_vq;
+    vq->descs[0].addr = blk_req_paddr;
+    vq->descs[0].len = sizeof(uint32_t) * 2 + sizeof(uint64_t);
+    vq->descs[0].flags = VIRTQ_DESC_F_NEXT;
+    vq->descs[0].next = 1;
+
+    vq->descs[1].addr = blk_req_paddr + offsetof(struct virtio_blk_req, data);
+    vq->descs[1].len = SECTOR_SIZE;
+    vq->descs[1].flags = VIRTQ_DESC_F_NEXT | (is_write ? 0 : VIRTQ_DESC_F_WRITE);
+    vq->descs[1].next = 2;
+
+    vq->descs[2].addr = blk_req_paddr + offsetof(struct virtio_blk_req, status);
+    vq->descs[2].len = sizeof(uint8_t);
+    vq->descs[2].flags = VIRTQ_DESC_F_WRITE;
+
+    // Notify the device that there is a new request
+    virtq_kick(vq, 0);
+
+    // Wait until the device finished processing.
+    while(virtq_is_busy(vq)){
+    }
+
+    // virtio-blk: If a non-zero value is returned, it's an error
+    if(blk_req->status != 0){
+        printf("virtio: warn: failed to read/write sector=%d status=%d\n", sector, blk_req->status);
+        return;
+    }
+
+    // For read operations, copy the data into the buffer
+    if(!is_write){
+        memcpy(buf, blk_req->data, SECTOR_SIZE);
+    }
+}
+
 
 struct process *create_process(const void *image, size_t image_size){
     // Find an unused process control structure.
@@ -173,6 +357,11 @@ struct process *create_process(const void *image, size_t image_size){
     for (paddr_t paddr = (paddr_t) __kernel_base; paddr < (paddr_t) __free_ram_end; paddr += PAGE_SIZE){
         map_page(page_table, paddr, paddr, PAGE_R | PAGE_W | PAGE_X);
     }
+
+    /* 
+        먼저, 커널이 MMIO 레지스터에 접근할 수 있도록 virtio-blk MMIO 영역을 페이지 테이블에 매핑한다.
+    */
+    map_page(page_table, VIRTIO_BLK_PADDR, VIRTIO_BLK_PADDR, PAGE_R | PAGE_W);
 
     /*
         실행 이미지를 지정된 크기에 맞게 페이지별로 복사하여 프로세스의 페이지 테이블에 매핑한다.
@@ -595,6 +784,16 @@ void kernel_main(void){
 
     // stvec 레지스터에 예외 처리기의 주소를 저장한다.
     WRITE_CSR(stvec, (uint32_t) kernel_entry);
+
+    virtio_blk_init();
+
+    char buf[SECTOR_SIZE];
+    read_write_disk(buf, 0, false /* read from the disk */);
+    printf("first sector: %s\n", buf);
+
+    strcpy(buf, "Hello from kernel!!!!\n");
+    read_write_disk(buf, 0, true /* write to the disk */);
+
     /*
         https://github.com/riscv-non-isa/riscv-asm-manual/blob/main/src/asm-manual.adoc#instruction-aliases
         csrrw x0, cycle, x0. 

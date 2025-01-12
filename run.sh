@@ -30,6 +30,13 @@ $CC $CFLAGS -Wl,-Tkernel.ld -Wl,-Map=kernel.map -o kernel.elf \
 # -nographic: GUI 창 없이 QEMU를 시작
 # -serial mon:stdio: QEMU의 표준 입출력을 가상 머신의 직렬포트에 연결
 # --no-reboot: 가상 머신이 충돌하면 재부팅하지 않고 에뮬레이터를 중지
+
+# -drive id=drive0: 드라이브0이라는 이름의 디스크를 정의하고, 디스크 이미지로 lorem.txt를 사용한다.
+# 디스크 이미지 형식은 raw(파일 내용을 그대로 디스크 데이터로 취급)
+
+# -device virtio-blk-device: 디스크 drive0에 virtio-blk 장치를 추가한다. bus=virtio-mmio-bus.0은 장치를 virtio-mmio버스 (메모리 매핑된 I/O를 통한 가상화)에 매핑한다.
 $QEMU -machine virt -bios default -nographic -serial mon:stdio --no-reboot \
     -d unimp,guest_errors,int,cpu_reset -D qemu.log \
-    -kernel kernel.elf # new: Load the kernel
+    -drive id=drive0,file=lorem.txt,format=raw,if=none \
+    -device virtio-blk-device,drive=drive0,bus=virtio-mmio-bus.0 \
+    -kernel kernel.elf
