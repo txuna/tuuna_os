@@ -26,9 +26,16 @@ int syscall(int sysno, int arg0, int arg1, int arg2) {
     return a0;
 }
 
+int readfile(const char *filename, char *buf, int len){
+    return syscall(SYS_READFILE, (int) filename, (int) buf, len);
+}
+
+int writefile(const char *filename, const char *buf, int len){
+    return syscall(SYS_WRITEFILE, (int) filename, (int) buf, len);
+}
+
 void putchar(char ch){
-    int a = syscall(SYS_PUTCHAR, ch, 0, 0);
-    //printf("%d\n", a);
+    syscall(SYS_PUTCHAR, ch, 0, 0);
 }
 
 int getchar(void){

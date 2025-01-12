@@ -18,6 +18,106 @@ extern char _binary_shell_bin_start[], _binary_shell_bin_size[];
 struct process *current_proc; // Current running process
 struct process *idle_proc; // Idle process (실행 가능한 프로세스가 없을 때 실행할 유휴 프로세스)
 
+struct file files[FILES_MAX];
+uint8_t disk[DISK_MAX_SIZE];
+
+int oct2int(char *oct, int len) {
+    int dec = 0;
+    for (int i=0;i<len;i++){
+        if(oct[i] < '0' || oct[i] > '7') {
+            break;
+        }
+
+        dec = dec * 8 + (oct[i] - '0');
+    }
+
+    return dec;
+}
+
+/*
+    이 함수에서는 먼저 read_write_disk함수를 사용하여 디스크 이미지를 임시 버퍼(디스크 변수)에 로드한다.
+    디스크 변수는 로컬(스택)변수가 아닌 정적 변수로 선언
+    스택의 크기는 제한되어 있으므로 큰 데이터 영역에는 사용하지 않는 것이 좋음
+    디스크 내용을 로드한 후 파일 변수 항목에 순차적으로 복사. 
+    tar 헤더의 숫자는 8진수 형식이라는 점 유의. 소수점 처럼 보일 수 있음
+    마지막으로 kernel_main에서 virtio-blk 디바이스를 초기화한 후 fs_init 함수를 호출(virto_blk_init)
+*/
+void fs_init(void){
+    for (unsigned sector = 0; sector < sizeof(disk) / SECTOR_SIZE; sector++){
+        read_write_disk(&disk[sector * SECTOR_SIZE], sector, false);
+    }
+
+    unsigned off = 0;
+    for (int i=0; i<FILES_MAX;i++){
+        struct tar_header *header = (struct tar_header *)&disk[off];
+        if(header->name[0] == '\0'){
+            break;
+        }
+
+        if(strcmp(header->magic, "ustar") != 0){
+            PANIC("invalid tar header: magic: %s", header->magic);
+        }
+
+        int filesz = oct2int(header->size, sizeof(header->size));
+        struct file *file = &files[i];
+        file->in_use = true;
+        strcpy(file->name, header->name);
+        memcpy(file->data, header->data, filesz);
+        file->size = filesz;
+        printf("file: %s, size=%d\n", file->name, file->size);
+
+        off += align_up(sizeof(struct tar_header) + filesz, SECTOR_SIZE);
+    }
+}
+
+void fs_flush(void){
+    // Copy all file contents into disk buffer
+    memset(disk, 0, sizeof(disk));
+    unsigned off = 0;
+    for (int file_i = 0; file_i < FILES_MAX; file_i++){
+        struct file *file = &files[file_i];
+        if(!file->in_use){
+            continue;
+        }
+
+        struct tar_header *header = (struct tar_header *)&disk[off];
+        memset(header, 0, sizeof(*header));
+        strcpy(header->name, file->name);
+        strcpy(header->mode, "000644");
+        strcpy(header->magic, "ustar");
+        strcpy(header->version, "00");
+        header->type = '0';
+
+        // Turn the file size into an octal string.
+        int filesz = file->size;
+        for (int i = sizeof(header->size); i>0;i--){
+            header->size[i - 1] = (filesz % 8) + '0';
+            filesz /= 8;
+        }
+
+        // Calculate the checksum
+        int checksum = ' ' * sizeof(header->checksum);
+        for (unsigned i = 0; i < sizeof(struct tar_header); i++){
+            checksum += (unsigned char) disk[off + i];
+        }
+
+        for (int i=5; i>=0; i--){
+            header->checksum[i] = (checksum % 8) + '0';
+            checksum /= 8;
+        }
+        
+        // Copy file data
+        memcpy(header->data, file->data, file->size);
+        off += align_up(sizeof(struct tar_header) + file->size, SECTOR_SIZE);
+    }
+
+    // Write 'disk' bufer into the virtio-blk
+    for(unsigned sector = 0; sector < sizeof(disk) / SECTOR_SIZE; sector++){
+        read_write_disk(&disk[sector * SECTOR_SIZE], sector, true);
+    }
+
+    printf("wrote %d bytes to disk\n", sizeof(disk));
+}
 
 /*
 모든 SBI 함수는 하나의 바이너리 인코딩을 공유하므로 SBI 확장을 쉽게 혼합할 수 있다. 
@@ -133,7 +233,12 @@ __attribute__((naked)) void user_entry(void){
         "sret \n" /* S-Mode에서 U-Mode로의 전환은 sret 명령으로 수해욈*/
         :
         :   [sepc] "r" (USER_BASE),
-            [sstatus] "r" (SSTATUS_SPIE)
+        /*
+            Read the RISC-V specification carefully. It does mention that "when the SUM bit is set, S-Mode can access U-Mode pages."
+            https://github.com/qemu/qemu/blob/d1181d29370a4318a9f11ea92065bea6bb159f83/target/riscv/cpu_helper.c#L1008
+            https://raw.githubusercontent.com/riscv/riscv-tee/main/Ssmpu/Ssmpu.pdf
+        */
+            [sstatus] "r" (SSTATUS_SPIE | SSTATUS_SUM)
     );
 }
 
@@ -533,6 +638,37 @@ void kernel_entry(void){
 */
 void handle_syscall(struct trap_frame *f){
     switch(f->a3){
+        case SYS_READFILE:
+        case SYS_WRITEFILE: {
+            /*
+                현재 사용자 공간의 포인터를 직접 참조하고 있는 문제가 있음 
+                => 사용자가 임의의 메모리 영역을 지정할 수 있다면 시스템 호출을 통해 커널 메모리 영역을 읽고 쓸 수 잇음
+            */
+            const char *filename = (const char *) f->a0;
+            char *buf = (char *)f->a1;
+            int len = f->a2;
+            struct file *file = fs_lookup(filename);
+            if(!file) {
+                printf("file not found: %s\n", filename);
+                f->a0 = -1;
+                break;
+            }
+
+            if(len > (int)sizeof(file->data)){
+                len = file->size;
+            }
+
+            if(f->a3 == SYS_WRITEFILE){
+                memcpy(file->data, buf, len);
+                file->size = len;
+                fs_flush();
+            } else {
+                memcpy(buf, file->data, len);
+            }
+
+            f->a0 = len;
+            break;
+        }
         case SYS_EXIT:
             printf("process %d exited\n", current_proc->pid);
             /*
@@ -564,6 +700,18 @@ void handle_syscall(struct trap_frame *f){
             PANIC("unexpected syscall a3=%x\n", f->a3);
     }
 }
+
+struct file *fs_lookup(const char *filename) {
+    for (int i = 0; i < FILES_MAX; i++) {
+        struct file *file = &files[i];
+        // printf("[debug] file: %s\n", file->name);
+        if (!strcmp(file->name, filename))
+            return file;
+    }
+
+    return NULL;
+}
+
 
 // sret:: 트랩 핸들러에서 반환(프로그램 카운터, 작동 모드 등 복원)
 /*
@@ -786,14 +934,14 @@ void kernel_main(void){
     WRITE_CSR(stvec, (uint32_t) kernel_entry);
 
     virtio_blk_init();
+    fs_init();
 
-    char buf[SECTOR_SIZE];
-    read_write_disk(buf, 0, false /* read from the disk */);
-    printf("first sector: %s\n", buf);
+//     char buf[SECTOR_SIZE];
+//     read_write_disk(buf, 0, false /* read from the disk */);
+//     printf("first sector: %s\n", buf);
 
-    strcpy(buf, "Hello from kernel!!!!\n");
-    read_write_disk(buf, 0, true /* write to the disk */);
-
+//     strcpy(buf, "Hello from kernel!!!!\n");
+//     read_write_disk(buf, 0, true /* write to the disk */);
     /*
         https://github.com/riscv-non-isa/riscv-asm-manual/blob/main/src/asm-manual.adoc#instruction-aliases
         csrrw x0, cycle, x0. 

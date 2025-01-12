@@ -30,9 +30,20 @@ prompt:
 
         if(strcmp(cmdline, "hello") == 0){
             printf("Hello World from shell!\n");
-        } else if (strcmp(cmdline, "exit") == 0) {
+        } 
+        else if (strcmp(cmdline, "exit") == 0) {
             exit();
-        } else {
+        } 
+        else if (strcmp(cmdline, "readfile") == 0) {
+            char buf[128]; 
+            int len = readfile("./hello.txt", buf, sizeof(buf));
+            buf[len] = '\0';
+            printf("%s\n", buf);
+        } 
+        else if (strcmp(cmdline, "writefile") == 0) {
+            writefile("./hello.txt", "Hello from shell!\n", 19);
+        }
+        else {
             printf("unknown command: %s\n", cmdline);
         }
     }

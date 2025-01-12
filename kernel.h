@@ -230,3 +230,49 @@ void virtq_kick(struct virtio_virtq *vq, int desc_index);
 void virtio_blk_init(void);
 bool virtq_is_busy(struct virtio_virtq *vq);
 void read_write_disk(void *buf, unsigned sector, int is_write);
+
+#define FILES_MAX      2
+#define DISK_MAX_SIZE  align_up(sizeof(struct file) * FILES_MAX, SECTOR_SIZE)
+
+/*
+    파일 시스템 구현에서 모든 파일은 부팅 시 디스크에서 메모리에 읽혀진다.
+    FILES_MAX는 로드할 수 있는 최대 파일 수를 정의하고 DISK_MAX_SIZE는 디스크 이미지 최대 크기를 지정한다.
+*/
+struct tar_header {
+    char name[100];
+    char mode[8];
+    char uid[8];
+    char gid[8];
+    char size[12];
+    char mtime[12];
+    char checksum[8];
+    char type;
+    char linkname[100];
+    char magic[6];
+    char version[2];
+    char uname[32];
+    char gname[32];
+    char devmajor[8];
+    char devminor[8];
+    char prefix[155];
+    char padding[12];
+    char data[]; //Array pointing to the data area following the header
+                // flexible array member
+} __attribute__((packed));
+
+struct file{
+    bool in_use; // Indicates if this file entry is in use 
+    char name[100]; // file name
+    char data[1024]; //file content 
+    size_t size; // file size
+};
+
+/*
+    RISC-V에서 S-Mode(커널)의 동작은 SUM(감독자 사용자 메모리 접근 허용) 비트를 포함한 sstatus CSR을 통해 구성할 수 있다.
+    SUM이 설정되어 있지 않으면 S-Mode 프로그램(커널)은 U-Mode(사용자) 페이지에 접근할 수 없다.
+*/
+#define SSTATUS_SUM (1 << 18)
+
+struct file *fs_lookup(const char *filename);
+void fs_init(void);
+void fs_flush(void);
