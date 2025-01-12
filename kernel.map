@@ -2,7 +2,7 @@
        0        0 80200000     1 . = 0x80200000
 80200000        0        0     1 __kernel_base = .
 80200000 80200000     15ca     4 .text
-80200000 80200000        e     2         /tmp/kernel-dff730.o:(.text.boot)
+80200000 80200000        e     2         /tmp/kernel-72cbe9.o:(.text.boot)
 80200000 80200000        0     1                 
 80200000 80200000        0     1                 
 80200000 80200000        0     1                 $x.1
@@ -10,7 +10,7 @@
 80200000 80200000        e     1                 boot
 8020000e 8020000e        0     1                 
 8020000e 8020000e        0     1                 
-80200010 80200010     1376     4         /tmp/kernel-dff730.o:(.text)
+80200010 80200010     1376     4         /tmp/kernel-72cbe9.o:(.text)
 80200010 80200010        0     1                 
 80200010 80200010        0     1                 
 80200010 80200010        0     1                 $x.0
@@ -1275,7 +1275,7 @@
 80201384 80201384        0     1                 .LBB27_1
 80201386 80201386        0     1                 
 80201386 80201386        0     1                 
-80201386 80201386      244     2         /tmp/common-594e8a.o:(.text)
+80201386 80201386      244     2         /tmp/common-1dd2a6.o:(.text)
 80201386 80201386        0     1                 
 80201386 80201386        0     1                 
 80201386 80201386        0     1                 $x.0
@@ -1502,43 +1502,43 @@
 802015c8 802015c8        0     1                 
 802015ca 802015ca        0     1                 
 802015ca 802015ca        0     1                 
-802015cc 802015cc      315     4 .rodata
-802015cc 802015cc      315     1         <internal>:(.rodata.str1.1)
-802018e4 802018e4    10450     4 .data
-802018e4 802018e4    10450     1         shell.bin.o:(.data)
-802018e4 802018e4        0     1                 _binary_shell_bin_start
-80211d34 80211d34        0     1                 _binary_shell_bin_end
-80211d34 80211d34        4     4 .sdata
-80211d34 80211d34        4     4         /tmp/kernel-dff730.o:(.sdata)
-80211d34 80211d34        4     1                 alloc_pages.next_paddr
-80211d34 80211d34        0     1                 $d.5
-80211d38 80211d38    11378     4 .bss
-80211d38 80211d38        0     1         __bss = .
-80211d38 80211d38    11358     4         /tmp/kernel-dff730.o:(.bss)
-80211d38 80211d38        0     1                 $d.2
-80211d38 80211d38      a00     1                 disk
-80212738 80212738      8d8     1                 files
-80213010 80213010    10080     1                 procs
-80223090 80223090       20     4         /tmp/kernel-dff730.o:(.sbss)
-80223090 80223090        0     1                 $d.4
-80223090 80223090        4     1                 blk_request_vq
-80223094 80223094        4     1                 blk_capacity
-80223098 80223098        4     1                 blk_req_paddr
-8022309c 8022309c        4     1                 blk_req
-802230a0 802230a0        4     1                 current_proc
-802230a4 802230a4        4     1                 idle_proc
-802230a8 802230a8        4     1                 proc_a
-802230ac 802230ac        4     1                 proc_b
-802230b0 802230b0        0     1         __bss_end = .
-802230b0 802230b0        0     1 . = ALIGN ( 4 )
-802230b0 802230b0    20000     1 . += 128 * 1024
-802430b0 802430b0        0     1 __stack_top = .
-802430b0 802430b0      f50     1 . = ALIGN ( 4096 )
+802015cc 802015cc      319     4 .rodata
+802015cc 802015cc      319     1         <internal>:(.rodata.str1.1)
+802018e8 802018e8    10450     4 .data
+802018e8 802018e8    10450     1         shell.bin.o:(.data)
+802018e8 802018e8        0     1                 _binary_shell_bin_start
+80211d38 80211d38        0     1                 _binary_shell_bin_end
+80211d38 80211d38        4     4 .sdata
+80211d38 80211d38        4     4         /tmp/kernel-72cbe9.o:(.sdata)
+80211d38 80211d38        4     1                 alloc_pages.next_paddr
+80211d38 80211d38        0     1                 $d.5
+80211d3c 80211d3c    11378     4 .bss
+80211d3c 80211d3c        0     1         __bss = .
+80211d3c 80211d3c    11358     4         /tmp/kernel-72cbe9.o:(.bss)
+80211d3c 80211d3c        0     1                 $d.2
+80211d3c 80211d3c      a00     1                 disk
+8021273c 8021273c      8d8     1                 files
+80213014 80213014    10080     1                 procs
+80223094 80223094       20     4         /tmp/kernel-72cbe9.o:(.sbss)
+80223094 80223094        0     1                 $d.4
+80223094 80223094        4     1                 blk_request_vq
+80223098 80223098        4     1                 blk_capacity
+8022309c 8022309c        4     1                 blk_req_paddr
+802230a0 802230a0        4     1                 blk_req
+802230a4 802230a4        4     1                 current_proc
+802230a8 802230a8        4     1                 idle_proc
+802230ac 802230ac        4     1                 proc_a
+802230b0 802230b0        4     1                 proc_b
+802230b4 802230b4        0     1         __bss_end = .
+802230b4 802230b4        0     1 . = ALIGN ( 4 )
+802230b4 802230b4    20000     1 . += 128 * 1024
+802430b4 802430b4        0     1 __stack_top = .
+802430b4 802430b4      f4c     1 . = ALIGN ( 4096 )
 80244000 80244000        0     1 __free_ram = .
 80244000 80244000  4000000     1 . += 64 * 1024 * 1024
 84244000 84244000        0     1 __free_ram_end = .
        0        0     177b     1 .debug_loc
-       0        0     14ac     1         /tmp/kernel-dff730.o:(.debug_loc)
+       0        0     14ac     1         /tmp/kernel-72cbe9.o:(.debug_loc)
        0        0        0     1                 
        0        0        0     1                 $d.6
       1b       1b        0     1                 
@@ -1654,7 +1654,7 @@
     1435     1435        0     1                 
     1452     1452        0     1                 
     1491     1491        0     1                 
-    14ac     14ac      2cf     1         /tmp/common-594e8a.o:(.debug_loc)
+    14ac     14ac      2cf     1         /tmp/common-1dd2a6.o:(.debug_loc)
     14ac     14ac        0     1                 
     14ac     14ac        0     1                 $d.2
     14ca     14ca        0     1                 
@@ -1673,17 +1673,17 @@
     1732     1732        0     1                 
     1768     1768        0     1                 
        0        0      49e     1 .debug_abbrev
-       0        0      376     1         /tmp/kernel-dff730.o:(.debug_abbrev)
+       0        0      376     1         /tmp/kernel-72cbe9.o:(.debug_abbrev)
        0        0        0     1                 $d.7
-     376      376      128     1         /tmp/common-594e8a.o:(.debug_abbrev)
+     376      376      128     1         /tmp/common-1dd2a6.o:(.debug_abbrev)
      376      376        0     1                 $d.3
        0        0     227b     1 .debug_info
-       0        0     1f5f     1         /tmp/kernel-dff730.o:(.debug_info)
+       0        0     1f5f     1         /tmp/kernel-72cbe9.o:(.debug_info)
        0        0        0     1                 $d.8
-    1f5f     1f5f      31c     1         /tmp/common-594e8a.o:(.debug_info)
+    1f5f     1f5f      31c     1         /tmp/common-1dd2a6.o:(.debug_info)
     1f5f     1f5f        0     1                 $d.4
        0        0      198     1 .debug_ranges
-       0        0      180     1         /tmp/kernel-dff730.o:(.debug_ranges)
+       0        0      180     1         /tmp/kernel-72cbe9.o:(.debug_ranges)
        0        0        0     1                 
        0        0        0     1                 $d.9
       18       18        0     1                 
@@ -1700,29 +1700,29 @@
      138      138        0     1                 
      150      150        0     1                 
      168      168        0     1                 
-     180      180       18     1         /tmp/common-594e8a.o:(.debug_ranges)
+     180      180       18     1         /tmp/common-1dd2a6.o:(.debug_ranges)
      180      180        0     1                 
      180      180        0     1                 $d.5
-       0        0      634     1 .debug_str
-       0        0      634     1         <internal>:(.debug_str)
+       0        0      63c     1 .debug_str
+       0        0      63c     1         <internal>:(.debug_str)
        0        0       42     1 .comment
        0        0       42     1         <internal>:(.comment)
        0        0       2b     1 .riscv.attributes
        0        0       2b     1         <internal>:(.riscv.attributes)
        0        0      350     4 .debug_frame
-       0        0      2cc     4         /tmp/kernel-dff730.o:(.debug_frame)
+       0        0      2cc     4         /tmp/kernel-72cbe9.o:(.debug_frame)
        0        0        0     1                 
        0        0        0     1                 $d.13
-     2cc      2cc       84     4         /tmp/common-594e8a.o:(.debug_frame)
+     2cc      2cc       84     4         /tmp/common-1dd2a6.o:(.debug_frame)
      2cc      2cc        0     1                 
      2cc      2cc        0     1                 $d.9
-       0        0     1a51     1 .debug_line
-       0        0     1679     1         /tmp/kernel-dff730.o:(.debug_line)
+       0        0     1a65     1 .debug_line
+       0        0     1685     1         /tmp/kernel-72cbe9.o:(.debug_line)
        0        0        0     1                 .Lline_table_start0
        0        0        0     1                 $d.14
-    1679     1679      3d8     1         /tmp/common-594e8a.o:(.debug_line)
-    1679     1679        0     1                 .Lline_table_start0
-    1679     1679        0     1                 $d.10
+    1685     1685      3e0     1         /tmp/common-1dd2a6.o:(.debug_line)
+    1685     1685        0     1                 .Lline_table_start0
+    1685     1685        0     1                 $d.10
        0        0     7080     4 .symtab
        0        0     7080     4         <internal>:(.symtab)
        0        0       ad     1 .shstrtab
