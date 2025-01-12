@@ -1,4 +1,4 @@
-#include "common.h"
+#include "../include/common/common.h"
 
 /* kernel, userland에서 둘다 사용 */
 

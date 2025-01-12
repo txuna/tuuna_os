@@ -1,6 +1,6 @@
 #pragma once
 
-#include "common.h"
+#include "../common/common.h"
 
 /*
 trap_frame 구조체는 kernel_entry에 저장된 프로그램 상태를 나타냄. 
