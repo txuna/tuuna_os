@@ -3,11 +3,36 @@
 extern char __stack_top[];
 
 __attribute__((noreturn)) void exit(void){
+    syscall(SYS_EXIT, 0, 0, 0);
     for(;;);
 }
 
-void putchar(char c){
+/*
+ecall 명령어는 커널에 처리를 위임하는데 사용하는 특수 명령어이다. 
+ecall 명령어가 실행되면 예외 핸들러가 호출되고 제어권이 커널로 전송된다.
+커널의 반환 값은 a0레지스터에 설정된다.
+*/
+int syscall(int sysno, int arg0, int arg1, int arg2) {
+    register int a0 __asm__("a0") = arg0;
+    register int a1 __asm__("a1") = arg1;
+    register int a2 __asm__("a2") = arg2;
+    register int a3 __asm__("a3") = sysno;
 
+    __asm__ __volatile__("ecall"
+                         : "=r"(a0)
+                         : "r"(a0), "r"(a1), "r"(a2), "r"(a3)
+                         : "memory");
+
+    return a0;
+}
+
+void putchar(char ch){
+    int a = syscall(SYS_PUTCHAR, ch, 0, 0);
+    //printf("%d\n", a);
+}
+
+int getchar(void){
+    return syscall(SYS_GETCHAR, 0, 0, 0);
 }
 
 /*

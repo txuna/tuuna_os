@@ -100,3 +100,20 @@ seL4는 이 방식을 채택. "where to store the program's context" 문제는 G
 
 paddr_t alloc_pages(uint32_t n);
 void map_page(uint32_t *table1, uint32_t vaddr, paddr_t paddr, uint32_t flags);
+
+/*
+    The base virtual address of an application image.
+    This neds to match the starting address defined in 'user.ld'
+*/
+#define USER_BASE 0x1000000
+
+/*
+애플리케이션을 실행하려면 사용자 모드라고 하는 CPU모드, 즉 RISC-V 용어로는 U-Mode를 사용
+U-Mode로 전환하는 방법은 아래와 같음
+*/
+#define SSTATUS_SPIE (1 << 5)
+#define SCAUSE_ECALL 8
+#define PROC_EXITED 2
+
+void yield(void);
+void switch_context(uint32_t *prev_sp, uint32_t *next_sp);

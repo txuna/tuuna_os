@@ -15,6 +15,7 @@ $CC $CFLAGS -Wl,-Tuser.ld -Wl,-Map=shell.map -o shell.elf \
 # 원시 바이너리는 기본 주소(0x1000000)에서 메모리로 확장되는 실제 콘텐츠. 
 # OS는 원시 바이너리의 내용을 복사하는 것만으로 애플리케이션을 메모리에 준비할 수 있음
 # 일반적인 OS는 메모리 내용과 매핑 정보가 분리된 ELF와 같은 형식을 사용 -> 단순화를 위해 원시 바이너리 사용
+# ELF와 같은 실행파일 형식의 경우 로드 주소는 파일 헤더에 저장됨. 하지만 어플리케이션의 실행 이미지는 원시 바이너리이므로 이와 같이 고정된 값으로 준비해야됨
 $OBJCOPY --set-section-flags .bss=alloc,contents -O binary shell.elf shell.bin
 
 # 원시 바이너리 실행 이미지를 C 언어에 임베드할 수 잇는 형식으로 변환 llvm-nm 명령을 사용하려 내부 확인 가능

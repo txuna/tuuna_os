@@ -13,6 +13,69 @@ extern char __free_ram[], __free_ram_end[];
 */
 extern char __kernel_base[]; 
 
+extern char _binary_shell_bin_start[], _binary_shell_bin_size[];
+
+struct process *current_proc; // Current running process
+struct process *idle_proc; // Idle process (실행 가능한 프로세스가 없을 때 실행할 유휴 프로세스)
+
+
+/*
+모든 SBI 함수는 하나의 바이너리 인코딩을 공유하므로 SBI 확장을 쉽게 혼합할 수 있다. 
+SBI 사양은 아래의 호출 규칙을 따른다.
+
+ECALL은 컨트롤 트랜스퍼 명령어로 쓰이며 supervisor와 SEE사이에서 쓰임
+a7은 SBI extension ID (EID)
+a6는 SBI v0.2 이후에 정의된 모든 SBI 확장에 대해 a7로 인코딩된 주어진 확장 ID에 대한 SBI 기능 ID(FID)를 인코딩
+
+https://tools.cloudbear.ru/docs/riscv-sbi-2.0-20231006.pdf- Chapter 3
+SBI 함수는 a0, a1 페어값을 반환한다. a0은 에러코드
+*/
+struct sbiret sbi_call(long arg0, long arg1, long arg2, long arg3, long arg4, long arg5, long fid, long eid){
+    /* 컴파이러에 지정된 레지스터에 값을 배치하도록 요청 */
+    register long a0 __asm__("a0") = arg0;
+    register long a1 __asm__("a1") = arg1;
+    register long a2 __asm__("a2") = arg2;
+    register long a3 __asm__("a3") = arg3; 
+    register long a4 __asm__("a4") = arg4;
+    register long a5 __asm__("a5") = arg5;
+    register long a6 __asm__("a6") = fid;
+    register long a7 __asm__("a7") = eid;
+
+    /* 
+        ecall 명령어 실행
+        CPU 실행 모드가 커널모드(S-MODE)에서 OpenSBI모드(M-MODE)로 전환됨.
+        OpenSBI의 처리 핸들러가 호출됨. 이 작업이 완료되면 다시 커널모드로 전환되고 ecall 명령어 이후 실행이 재개
+     */
+
+    /* ecall 명령은 어플리케이션이 커널을 호출할 때(syscall) 사용되기도 함. 이 명령어는 더 높은 권한의 CPU 모드로의 함수 호출처럼 동작 */
+    __asm__ __volatile__("ecall"
+                        : "=r"(a0), "=r"(a1)
+                        : "r"(a0), "r"(a1), "r"(a2), "r"(a3), "r"(a4), "r"(a5),
+                        "r"(a6), "r"(a7)
+                        : "memory");
+    return (struct sbiret){.error = a0, .value = a1};
+}
+/*
+    long sbi_console_putchar(int ch)
+    ch에 있는 데이터를 콘솔 디버깅에 쓴다. sbi_console_getchar()와 달리 이 SBI 호출은 전송할 대기 중인 문자가 남아 있거나 수신 터미널이 아직 바이트를 수신할 준비가 되지 않은 경우 차단된다.
+    그러나 콘솔이 전혀 존재하지 않으면 문자가 버려진다. 
+    이 SBI 호출은 성공시 0을 반환하거나 구현에 따라 에러 코드를 반환
+    -> 디버그 콘솔에 전송
+*/
+void putchar(char ch){
+    sbi_call(ch, 0, 0, 0, 0, 0, 0, 1 /* Console Putchar */);
+}
+
+/*
+    "input to the debug console"로부터 값을 읽는다. 입력이 없으면 -1을 리턴한다.
+    엄밀히 말하면 SBI는 키보드에서 문자를 읽는 것이 아니라 직렬포트에서 문자를 익는다. 
+    키보드 또는(QEMU의 표준 입력)가 직렬 포트와 연결되어 있기때문에 동작한다.
+*/
+int getchar(void){
+    struct sbiret ret = sbi_call(0, 0, 0, 0, 0, 0, 0, 2);
+    return ret.error;
+}
+
 /*
 Context Switching. 
 이는 프로세스간 실행 컨텍스를 스위칭
@@ -62,8 +125,20 @@ __attribute__((naked)) void switch_context(uint32_t *prev_sp, uint32_t *next_sp)
 
 struct process procs[PROCS_MAX]; //All process control structures
 
-struct process *create_process(uint32_t pc){
-    printf("call create_process\n");
+__attribute__((naked)) void user_entry(void){
+    __asm__ __volatile__(
+        "csrw sepc, %[sepc] \n" /* sepc 레지스터에서 U-Mode로 전환할 때의 프로그램 카운터를 설정, sret가 점프하는 위치 */
+        // 현재 구현에서는 하드웨어 인터럽트를 사용하지 않고 폴링을 사용하므로 SPIE 비트를 설정할 필요는 없음
+        "csrw sstatus, %[sstatus]\n" /* sstatus 레지스터에서 SPIE 비트를 설정 -> U-Mode에 진입할 때 하드웨어 인터럽트가 활성화되고 stvec 레지스터에 설정된 핸들러가 호출*/
+        "sret \n" /* S-Mode에서 U-Mode로의 전환은 sret 명령으로 수해욈*/
+        :
+        :   [sepc] "r" (USER_BASE),
+            [sstatus] "r" (SSTATUS_SPIE)
+    );
+}
+
+
+struct process *create_process(const void *image, size_t image_size){
     // Find an unused process control structure.
     struct process *proc = NULL; 
     int i; 
@@ -91,12 +166,29 @@ struct process *create_process(uint32_t pc){
     *--sp = 0;                      // s2
     *--sp = 0;                      // s1
     *--sp = 0;                      // s0
-    *--sp = (uint32_t )pc;          // ra
+    *--sp = (uint32_t ) user_entry; // ra
 
-    // Map Kernel Pages.
+    // Map Kernel Pages. - 이건 왜 하는거지 음 
     uint32_t *page_table = (uint32_t *) alloc_pages(1);
     for (paddr_t paddr = (paddr_t) __kernel_base; paddr < (paddr_t) __free_ram_end; paddr += PAGE_SIZE){
         map_page(page_table, paddr, paddr, PAGE_R | PAGE_W | PAGE_X);
+    }
+
+    /*
+        실행 이미지를 지정된 크기에 맞게 페이지별로 복사하여 프로세스의 페이지 테이블에 매핑한다.
+        첫 번째 컨텍스트 전환의 점프 대상을 user_entry로 설정한다.
+
+        실행 이미지를 복사하지 않고 직접 매핑하면 동일한 애플리케이션의 프로세스가 동일한 물리적 페이지를 공유하게됨 -> 메모밀 분리 실패
+    */
+    for (uint32_t off = 0; off < image_size; off += PAGE_SIZE){
+        paddr_t page = alloc_pages(1);
+
+        // Handle the case where the data to be copied is smaller than page size; 
+        size_t remaining = image_size - off;
+        size_t copy_size = PAGE_SIZE <= remaining ? PAGE_SIZE : remaining;
+    
+        memcpy((void*) page, image + off, copy_size); 
+        map_page(page_table, USER_BASE + off, page, PAGE_U | PAGE_R | PAGE_W | PAGE_X);
     }
 
     proc->pid = i + 1;
@@ -201,8 +293,13 @@ void kernel_entry(void){
         "sw s10, 4 * 28(sp)\n"
         "sw s11, 4 * 29(sp)\n"
 
+        // 예외가 발생한 시점의 SP를 검색하여 저장한다.
         "csrr a0, sscratch\n"
         "sw a0, 4 * 30(sp)\n"
+
+        // 커널스택 초기화
+        "addi a0, sp, 4 * 31\n"
+        "csrw sscratch, a0\n"
 
         "mv a0, sp\n"
         "call handle_trap\n"
@@ -241,6 +338,44 @@ void kernel_entry(void){
         "sret\n"
     );
 }
+
+/*
+    트랩 핸들러에 저장된 "registers at the time of exception"의 구조를 받는다.
+*/
+void handle_syscall(struct trap_frame *f){
+    switch(f->a3){
+        case SYS_EXIT:
+            printf("process %d exited\n", current_proc->pid);
+            /*
+                간단히 표현하기 위해 PROC_EXITED 플래그만 표시했지만 실질적인 OS는 페이지 테이블, 할당된 메모리 영역과 같이 프로세스가 보유한 리소스를 정리해야됨
+            */
+            current_proc->state = PROC_EXITED;
+            yield();
+            PANIC("unreachable");
+        /*
+            getchar 시스템 호출은 문자가 입력될때까지 SBI를 반복적으로 호출한다.
+            단순 반복이면 CPU를 점유하기에 다른 프로세스에 양보하기 위해 yield호출
+        */
+        case SYS_GETCHAR:
+            while(1){
+                long ch = getchar();
+                if (ch >= 0){
+                    f->a0 = ch;
+                    break;
+                }
+
+                yield();
+            }
+            break;
+
+        case SYS_PUTCHAR:
+            putchar(f->a0);
+            break;
+        default:
+            PANIC("unexpected syscall a3=%x\n", f->a3);
+    }
+}
+
 // sret:: 트랩 핸들러에서 반환(프로그램 카운터, 작동 모드 등 복원)
 /*
 https://github.com/d0iasm/rvemu/blob/f55eb5b376f22a73c0cf2630848c03f8d5c93922/src/cpu.rs#L3357-L3400
@@ -258,10 +393,23 @@ void handle_trap(struct trap_frame *f){
     uint32_t user_pc = READ_CSR(sepc);
 
     /*
-        scause가 2이면 프로그램이 잘못된 명령어를 실행하려고 시도했음을 의미 unimp의 예상동작
-        sepc의 값은 unimp 명령어가 호출되는 줄을 가리킴
+        ecall 명령어가 호출되었는지 여부는 scause 값을 확인하여 확인이 가능하다.
+        handle_syscall 함수를 호출하는 것 이외에도 sepc값에 4(ecall 명령어의 크기)를 더한다.
+        이는 sepc가 예외를 발생시킨 프로그램 카운터를 가리키며 이 카운터가 ecall 명령어를 가리키기 때문이다. 
+        이를 변경하지 않으면 커널이 같은 위치로 돌아가서 ecall 명령어가 반복적으로 실행된다.
     */
-    PANIC("unexpected trap scause=%x, stval=%x, sepc=%x\n", scause, stval, user_pc);
+    if (scause == SCAUSE_ECALL){
+        handle_syscall(f);
+        user_pc += 4;
+    } else {
+        /*
+            scause가 2이면 프로그램이 잘못된 명령어를 실행하려고 시도했음을 의미 unimp의 예상동작
+            sepc의 값은 unimp 명령어가 호출되는 줄을 가리킴
+        */
+        PANIC("unexpected trap scause=%x, stval=%x, sepc=%x\n", scause, stval, user_pc);
+    }
+
+    WRITE_CSR(sepc, user_pc);
 }
 
 /*
@@ -327,53 +475,6 @@ void map_page(uint32_t *table1, uint32_t vaddr, paddr_t paddr, uint32_t flags){
     table0[vpn0] = ((paddr / PAGE_SIZE) << 10 | flags | PAGE_V);
 }
 
-/*
-모든 SBI 함수는 하나의 바이너리 인코딩을 공유하므로 SBI 확장을 쉽게 혼합할 수 있다. 
-SBI 사양은 아래의 호출 규칙을 따른다.
-
-ECALL은 컨트롤 트랜스퍼 명령어로 쓰이며 supervisor와 SEE사이에서 쓰임
-a7은 SBI extension ID (EID)
-a6는 SBI v0.2 이후에 정의된 모든 SBI 확장에 대해 a7로 인코딩된 주어진 확장 ID에 대한 SBI 기능 ID(FID)를 인코딩
-
-https://tools.cloudbear.ru/docs/riscv-sbi-2.0-20231006.pdf- Chapter 3
-SBI 함수는 a0, a1 페어값을 반환한다. a0은 에러코드
-*/
-struct sbiret sbi_call(long arg0, long arg1, long arg2, long arg3, long arg4, long arg5, long fid, long eid){
-    /* 컴파이러에 지정된 레지스터에 값을 배치하도록 요청 */
-    register long a0 __asm__("a0") = arg0;
-    register long a1 __asm__("a1") = arg1;
-    register long a2 __asm__("a2") = arg2;
-    register long a3 __asm__("a3") = arg3; 
-    register long a4 __asm__("a4") = arg4;
-    register long a5 __asm__("a5") = arg5;
-    register long a6 __asm__("a6") = fid;
-    register long a7 __asm__("a7") = eid;
-
-    /* 
-        ecall 명령어 실행
-        CPU 실행 모드가 커널모드(S-MODE)에서 OpenSBI모드(M-MODE)로 전환됨.
-        OpenSBI의 처리 핸들러가 호출됨. 이 작업이 완료되면 다시 커널모드로 전환되고 ecall 명령어 이후 실행이 재개
-     */
-
-    /* ecall 명령은 어플리케이션이 커널을 호출할 때(syscall) 사용되기도 함. 이 명령어는 더 높은 권한의 CPU 모드로의 함수 호출처럼 동작 */
-    __asm__ __volatile__("ecall"
-                        : "=r"(a0), "=r"(a1)
-                        : "r"(a0), "r"(a1), "r"(a2), "r"(a3), "r"(a4), "r"(a5),
-                        "r"(a6), "r"(a7)
-                        : "memory");
-    return (struct sbiret){.error = a0, .value = a1};
-}
-/*
-    long sbi_console_putchar(int ch)
-    ch에 있는 데이터를 콘솔 디버깅에 쓴다. sbi_console_getchar()와 달리 이 SBI 호출은 전송할 대기 중인 문자가 남아 있거나 수신 터미널이 아직 바이트를 수신할 준비가 되지 않은 경우 차단된다.
-    그러나 콘솔이 전혀 존재하지 않으면 문자가 버려진다. 
-    이 SBI 호출은 성공시 0을 반환하거나 구현에 따라 에러 코드를 반환
-    -> 디버그 콘솔에 전송
-*/
-void putchar(char ch){
-    sbi_call(ch, 0, 0, 0, 0, 0, 0, 1 /* Console Putchar */);
-}
-
 struct process *proc_a; 
 struct process *proc_b;
 
@@ -382,8 +483,6 @@ struct process *proc_b;
     switch_context 함수를 직접 호출하여 "다음에 실행할 프로세스"를 지정함.
     프로세스 수가 많아지면 선택에 있어 골치아픔 -> 스케줄러 구현
 */
-struct process *current_proc; // Current running process
-struct process *idle_proc; // Idle process (실행 가능한 프로세스가 없을 때 실행할 유휴 프로세스)
 
 void yield(void){
     struct process *next = idle_proc;
@@ -508,17 +607,11 @@ void kernel_main(void){
         current_proc = idle_proc를 통해 부팅 프로세스의 실행 컨텍스트가 유휴 프로세스의 실행 컨텍스트로 저장되고 복원된다.
         반환 함수를 처음 호출하는 동안 유휴 프로세스에서 프로세스 A로 전환하고, 다시 유휴 프로세스로 전환할 때는 이 반환 함수 호출에서 반환하는 것처럼 동작한다.
     */
-    idle_proc = create_process((uint32_t)NULL);
+    idle_proc = create_process(NULL, 0);
     idle_proc->pid = -1; // IDLE
     current_proc = idle_proc;
 
-    paddr_t paddr0 = alloc_pages(2);
-    paddr_t paddr1 = alloc_pages(1);
-    printf("alloc_pages test: paddr0=%x\n", paddr0);
-    printf("alloc_pages test: paddr1=%x\n", paddr1);
-
-    proc_a = create_process((uint32_t)proc_a_entry);
-    proc_b = create_process((uint32_t)proc_b_entry);
+    create_process(_binary_shell_bin_start, (size_t)_binary_shell_bin_size);
 
     yield();
     PANIC("booted!");
